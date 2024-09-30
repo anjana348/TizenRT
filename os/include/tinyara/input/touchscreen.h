@@ -69,7 +69,8 @@
 #include <tinyara/config.h>
 #include <tinyara/fs/ioctl.h>
 
-#ifdef CONFIG_INPUT
+#ifdef CONFIG_TOUCH
+#include <tinyara/i2c.h>
 
 /************************************************************************************
  * Pre-processor Definitions
@@ -85,6 +86,8 @@
 
 #define TSC_FIRST            0x0001          /* First common command */
 #define TSC_NCMDS            4               /* Four common commands */
+
+#define TOUCH_DEV_PATH "/dev/touch0"	// Touch driver node path
 
 /* User defined ioctl commands are also supported.  However, the TSC driver must
  * reserve a block of commands as follows in order prevent IOCTL command numbers
@@ -121,7 +124,7 @@
 #define TOUCH_POS_VALID      (1 << 4) /* Hardware provided a valid X/Y position */
 #define TOUCH_PRESSURE_VALID (1 << 5) /* Hardware provided a valid pressure */
 #define TOUCH_SIZE_VALID     (1 << 6) /* Hardware provided a valid H/W contact size */
-
+#define TOUCH_MAX_POINTS 	15    /* Maximum number of simultaneous touch point supported */
 /************************************************************************************
  * Public Types
  ************************************************************************************/
@@ -154,10 +157,50 @@ struct touch_point_s {
  * a touch from first contact until the end of the contact.
  */
 
+/*
+ * This is a interrupt handler for touch. The lower level code will intercept the interrupt
+ * and provide the uppper level code with private data with interrupt attached.
+ */
+typedef CODE void (*touch_handler_t)(FAR void *arg);
+
+/*
+ * This structure contains the array that have information about each simultaneous touch point.
+ */
 struct touch_sample_s {
 	int npoints;                   /* The number of touch points in point[] */
-	struct touch_point_s point[1]; /* Actual dimension is npoints */
+	struct touch_point_s point[TOUCH_MAX_POINTS]; /* Actual dimension is npoints */
 };
+
+/*
+ * This structure of this type must be passed to driver. This provides information about
+ * configuration of touch and i2c.
+ * Memory is provided by caller. It is not copied by the driver and is presumed to persist
+ * while the driver is active.
+ */
+struct touch_lower_s {
+	struct i2c_config_s i2c_config;		/* Contains configuration of i2c */
+
+	/* Touch handler intercepted by lower level and called by driver */
+	CODE void (*attach)(touch_handler_t handler, FAR char *arg);
+	CODE void (*irq_enable)();	/* Enables the irq */
+	CODE void (*irq_disable)();	/* Disables the irq */
+};
+
+/*
+ * Structure is used by both upper and lower level code.
+ * This structure is used to control touch device like disable touch, read touch data
+ * and notify device.
+ */
+struct touch_dev_s {
+	int (*touch_read)(struct touch_dev_s *priv, FAR char *buffer);	/* Read touch point */
+	void (*touch_enable)(struct touch_dev_s *dev);			/* Enable touch */
+	void (*touch_disable)(struct touch_dev_s *dev);			/* Disable touch */
+
+	/* It's set to true when there is touch interrupt and set to false after data is read from device */
+	bool (*is_touchSet)(struct touch_dev_s *dev);
+	void (*notify_touch)(struct touch_dev_s *dev);		/* Check each touches and notify */
+};
+
 #define SIZEOF_TOUCH_SAMPLE_S(n) (sizeof(struct touch_sample_s) + ((n) - 1) * sizeof(struct touch_point_s))
 
 /************************************************************************************
