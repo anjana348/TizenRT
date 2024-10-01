@@ -74,6 +74,7 @@ struct rtl8730e_ist415_touchinfo_s {
 static void rtl8730e_ist415_enable_irq(void);
 static void rtl8730e_ist415_disable_irq(void);
 static void rtl8730e_ist415_irq_attach(touch_handler_t handler, FAR char *arg);
+static void rtl8730e_ist415_gpio_reset(void);
 
 /****************************************************************************
  * Private Data
@@ -89,6 +90,7 @@ static struct rtl8730e_ist415_touchinfo_s g_ist415info = {
 		.attach = rtl8730e_ist415_irq_attach,
 		.irq_enable = rtl8730e_ist415_enable_irq,
 		.irq_disable = rtl8730e_ist415_disable_irq,
+		.reset = rtl8730e_ist415_gpio_reset,
 	},
 	.handler = NULL,
 };

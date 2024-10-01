@@ -54,12 +54,14 @@
 #include <tinyara/irq.h>
 #include <tinyara/input/touchscreen.h>
 #include <ist415.h>
+#include <tinyara/wqueue.h>
 
 /****************************************************************************
  * Pre-Processor Definitions
  ****************************************************************************/
 
 #define EVENT_PACKET_SIZE 16
+#define TIMEOUT (2*CLK_TCK)
 
 /****************************************************************************
  * Private Types
@@ -73,11 +75,125 @@
  * Private Data
  ****************************************************************************/
 
+static struct work_s ist415_work;
 static FAR struct ist415_dev_s g_ist415_priv;
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+static void ist415_check_status(FAR void *arg);
+static int ist415_get_touch_data(struct ist415_dev_s *priv, FAR void *buf);
+static int ist415_i2c_readword(struct ist415_dev_s *priv, u32 regaddr, u32 *pdata, u32 len);
+
+/****************************************************************************
+ * Name: ist415_i2c_readword
+ ****************************************************************************/
+static int ist415_i2c_readword(struct ist415_dev_s *priv, u32 regaddr, u32 *pdata, u32 len)
+{
+	s32 ret;
+	u32 i, j;
+	u8 *senddata;
+	u32 senddatalen;
+	u8 cmd = HCOM_SW_DA;
+	u32 bytelen = (len * sizeof(u32));
+	u8 *pbuf;
+	u32 tmpdata;
+	struct i2c_dev_s *i2c = priv->i2c;
+	struct i2c_config_s config = priv->config;
+
+	if (len == 0)
+		return 0;
+
+	pbuf = (u8 *)kmm_calloc(bytelen, sizeof(u8));
+	if (pbuf == NULL) {
+		printf("mem alloc fail !!\r\n");
+		return -1;
+	}
+
+	senddatalen = sizeof(cmd) + sizeof(regaddr);
+
+	senddata = (u8 *)kmm_calloc(senddatalen, sizeof(u8));
+	if (senddata == NULL) {
+		free(pbuf);
+		senddata = NULL;
+		printf("mem alloc fail !!\r\n");
+		return -1;
+	}
+
+	*senddata = cmd;
+
+	// ### Align the data for register address.
+	for (i = 0; i < sizeof(regaddr); i++) {
+		*(senddata + sizeof(cmd) + i) = (u8)((regaddr >> (((sizeof(u32) - 1) - i) * 8)) & 0xFF);
+	}
+
+	// ### I2C repeat start processing.
+	ret = i2c_write(i2c, &config, senddata, senddatalen);
+	if (ret != senddatalen) {
+		printf("i2c write fail !!\r\n");
+		return -1;
+	} else {
+		ret = i2c_read(i2c, &config, pbuf, bytelen);
+		if (ret != bytelen) {
+			printf("i2c read fail !!\r\n");
+			return -1;
+		}
+		// ### Align the data.
+		for (i = 0; i < len; i++) {
+			tmpdata = 0;
+
+			for(j=0; j<sizeof(u32); j++) {
+				tmpdata |= (u32)(*(pbuf + ((i * sizeof(u32)) + j)) << (((sizeof(u32) - 1) - j) * 8));
+			}
+
+			*(pdata+i) = tmpdata;
+		}
+	}
+
+	if (pbuf) {
+		free(pbuf);
+		pbuf = NULL;
+	}
+
+	if (senddata) {
+		free(senddata);
+		senddata = NULL;
+	}
+
+	return ret;
+}
+
+static void status_timerfn(int argc, uint32_t arg, ...)
+{
+        work_queue(HPWORK, &ist415_work, ist415_check_status, (void *)&arg, 0);
+}
+
+/****************************************************************************
+ * Name: ist415_check_status
+ ****************************************************************************/
+
+static void ist415_check_status(FAR void *arg)
+{
+	u32 touch_status = 0;
+
+	struct ist415_dev_s *priv = &g_ist415_priv;
+	sem_wait(&priv->status_check_sem);
+        int ret = ist415_i2c_readword(priv, IST415X_TOUCH_STATUS, &touch_status, 1);
+
+        if ((touch_status & TOUCH_STATUS_MASK) != TOUCH_STATUS_MAGIC) {
+                printf("Touch status is not corrected (0x%08x)\n", touch_status);
+		priv->lower->reset();
+		sem_post(&priv->status_check_sem);
+        } else {
+		sem_post(&priv->status_check_sem);
+		printf("touch is working correctly\n");
+		int ret = wd_start(priv->wdog, TIMEOUT, status_timerfn, 1,  1);
+                if (ret != OK) {
+			wd_cancel(priv->wdog);
+		}
+
+	}
+}
 
 /****************************************************************************
  * Name: ist415_get_touch_data
@@ -94,15 +210,18 @@ static int ist415_get_touch_data(struct ist415_dev_s *dev, FAR void *buf)
 	u8 *touch_event;
 	u8 eid;
 	int reg[2] = {HCOM_GET_EVENT_1ST, 0};
+	while (sem_wait(&dev->status_check_sem) != 0) {
+		ASSERT(errno == EINTR);
+        }
 	int ret = i2c_write(i2c, &config, (uint8_t *)reg, 1);
 	if (ret != 1) {
 		touchdbg("ERROR: I2C write failed\n");
-		return ret;
+		goto errout_touch;
 	}
 	ret = i2c_read(i2c, &config, (uint8_t *)event, EVENT_PACKET_SIZE);
 	if (ret != EVENT_PACKET_SIZE) {
 		touchdbg("ERROR: I2C read failed\n");
-		return ret;
+		goto errout_touch;
 	}
 	touch_point = event[7] & 0x1F;
 	touch_event = (u8 *)kmm_malloc((touch_point + 1) * EVENT_PACKET_SIZE);
@@ -112,17 +231,19 @@ static int ist415_get_touch_data(struct ist415_dev_s *dev, FAR void *buf)
 		ret = i2c_write(i2c, &config, (uint8_t *)reg, 1);
 		if (ret != 1) {
 			touchdbg("ERROR: I2C write failed\n");
-			return ret;
+			goto errout_touch;
 		}
 		ret = i2c_read(i2c, &config, touch_event + EVENT_PACKET_SIZE, touch_point * EVENT_PACKET_SIZE);
 		if (ret != touch_point * EVENT_PACKET_SIZE) {
 			touchdbg("ERROR: I2C read failed\n");
-			return ret;
+			goto errout_touch;
 		}
 	} else if (touch_point >= 0x1F) {
 		touchdbg("ERROR:touch events bufer overflow\n");
-		return -EIO;
+		ret = -EIO;
+		goto errout_touch;
 	}
+	sem_post(&dev->status_check_sem);
 	touchvdbg("touch_point %d\n", touch_point + 1);
 	data->npoints = touch_point + 1;
 	for (int i = 0; i < (touch_point + 1); i++) {
@@ -150,6 +271,9 @@ static int ist415_get_touch_data(struct ist415_dev_s *dev, FAR void *buf)
 		}
 	}
 	return OK;
+errout_touch:
+	sem_post(&dev->status_check_sem);
+	return ret;
 }
 
 /****************************************************************************
@@ -159,6 +283,11 @@ static int ist415_get_touch_data(struct ist415_dev_s *dev, FAR void *buf)
 static void ist415_enable(struct touch_dev_s *dev)
 {
 	struct ist415_dev_s *priv = (struct ist415_dev_s *)dev;
+	sem_post(&priv->status_check_sem);
+	int ret = wd_start(priv->wdog, TIMEOUT, status_timerfn, 1,  1);
+	if (ret != OK) {
+		wd_delete(priv->wdog);
+	}
 	priv->lower->irq_enable();
 }
 
@@ -169,6 +298,8 @@ static void ist415_enable(struct touch_dev_s *dev)
 static void ist415_disable(struct touch_dev_s *dev)
 {
 	struct ist415_dev_s *priv = (struct ist415_dev_s *)dev;
+	work_cancel(HPWORK, &ist415_work);
+	wd_delete(priv->wdog);
 	priv->lower->irq_disable();
 }
 
@@ -247,12 +378,14 @@ FAR struct touch_dev_s *ist415_touchinitialize(FAR struct i2c_dev_s *i2c_dev, FA
 	priv->lower = config;
 	priv->config = config->i2c_config;
 	priv->i2c = i2c_dev;
+	priv->wdog = wd_create();
 	priv->dev.touch_read = ist415_read;
 	priv->dev.touch_enable = ist415_enable;
 	priv->dev.touch_disable = ist415_disable;
 	priv->dev.is_touchSet = is_touchSet;
 	priv->lower->attach((void *)touch_interrupt, NULL);
 	priv->lower->irq_disable();
+	sem_init(&priv->status_check_sem, 0, 0);
 
 	reg[0] = 0x23;
 	ret = i2c_write(priv->i2c, &(priv->config), (uint8_t *)reg, 1);

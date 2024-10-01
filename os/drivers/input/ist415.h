@@ -47,6 +47,11 @@
 
 #define	MAX_FINGER_NUM					5
 
+// TOUCH STATUS
+#define IST415X_TOUCH_STATUS            0x20000000
+#define TOUCH_STATUS_MAGIC              0x00000075
+#define TOUCH_STATUS_MASK               0x000000FF
+
 ////////////////////////////////////////////////////////////////
 // SEC Command
 // System (Write)
@@ -262,4 +267,6 @@ struct ist415_dev_s {
 	struct i2c_config_s config;
 	bool int_pending;
 	struct touch_lower_s *lower;
+	sem_t status_check_sem;
+	int wdog;
 };

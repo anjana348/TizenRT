@@ -179,7 +179,7 @@ struct touch_sample_s {
  */
 struct touch_lower_s {
 	struct i2c_config_s i2c_config;		/* Contains configuration of i2c */
-
+	CODE void (*reset)();
 	/* Touch handler intercepted by lower level and called by driver */
 	CODE void (*attach)(touch_handler_t handler, FAR char *arg);
 	CODE void (*irq_enable)();	/* Enables the irq */
