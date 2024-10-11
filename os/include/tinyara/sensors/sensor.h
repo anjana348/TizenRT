@@ -1,6 +1,5 @@
-/****************************************************************************
- *
- * Copyright 2016 Samsung Electronics All Rights Reserved.
+ /*
+ * Copyright 2019 Samsung Electronics All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +14,10 @@
  * language governing permissions and limitations under the License.
  *
  ****************************************************************************/
-/****************************************************************************
- * examples/sensor_test/sensor_main.c
+/************************************************************************************
+ * include/tinyara/sensor/sensor.h
  *
- *   Copyright (C) 2008, 2011-2012 Gregory Nutt. All rights reserved.
+ *   Copyright (C) 2011-2012, 2017 Gregory Nutt. All rights reserved.
  *   Author: Gregory Nutt <gnutt@nuttx.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,50 +47,53 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- ****************************************************************************/
+ ************************************************************************************/
 
-/****************************************************************************
+#ifndef __INCLUDE_TINYARA_SENSOR_H
+#define __INCLUDE_TINYARA_SENSOR_H
+
+/************************************************************************************
  * Included Files
- ****************************************************************************/
+ ************************************************************************************/
 
 #include <tinyara/config.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <tinyara/sensors/sensor.h>
-#define IR_SENSOR_PATH "/dev/sensor0"
-#define MEMS_SENSOR_PATH "/dev/sensor1"
+#include <tinyara/fs/ioctl.h>
 
-static int temp_read()
+
+#define SENSOR_TEST _SNIOC(1)
+
+struct sensor_ops_s {
+	int (*sensor_read)(struct sensor_upperhalf_s *priv, FAR char *buffer);
+};
+
+#define CONFIG_SENSOR_NPOLLWAITERS 2
+/* This structure describes the state of the upper half driver */
+
+struct sensor_upperhalf_s
 {
-        int fd = 0;
-	int fd1 = 0;
-        fd = open(IR_SENSOR_PATH, O_RDWR | O_SYNC, 0666);
-        if (fd < 0) {
-                printf("ERROR: Failed to open sensor port error:%d\n", fd);
-                return;
-        }
-	fd1 = open(MEMS_SENSOR_PATH, O_RDWR | O_SYNC, 0666);
-        if (fd1 < 0) {
-                printf("ERROR: Failed to open sensor port error:%d\n", fd1);
-                return;
-        }
-        char buf[2];
-	printf("Read from IR sensor\n");
-        read(fd, buf, 2);
-	printf("Read from MEMS sensor\n");
-	read(fd1, buf, 2);
-        printf("sensor test complete \n");
-	close(fd);
-	close(fd1);
-}
-
-#ifdef CONFIG_BUILD_KERNEL
-int main(int argc, FAR char *argv[])
-#else
-int sensor_main(int argc, char *argv[])
+	sem_t sem;
+	uint8_t crefs;
+#ifndef CONFIG_DISABLE_POLL
+	sem_t pollsem;
+	struct pollfd *fds[CONFIG_SENSOR_NPOLLWAITERS];
 #endif
-{
-	printf("Sensor test!!\n");
-	temp_read();
-	return 0;
+
+	const struct sensor_ops_s *ops;	/* Arch-specific operations */
+	void *priv;
+	void (*func)(void);
+};
+
+#ifdef __cplusplus
+#define EXTERN extern "C"
+extern "C" {
+#else
+#define EXTERN extern
+#endif
+
+#undef EXTERN
+#ifdef __cplusplus
 }
+#endif
+
+#endif /* __INCLUDE_TINYARA_SENSOR_H */
+

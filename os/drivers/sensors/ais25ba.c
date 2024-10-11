@@ -27,17 +27,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-//#include <poll.h>
 #include <assert.h>
 #include <errno.h>
 #include <debug.h>
 #include <tinyara/fs/fs.h>
 #include <tinyara/fs/ioctl.h>
 
-#include <tinyara/spi/spi.h>
 #include <tinyara/i2c.h>
+#include <tinyara/audio/audio.h>
+#include <tinyara/audio/i2s.h>
+
 #include <tinyara/sensors/sensor.h>
-#include <tinyara/sensors/mlx90617.h>
+#include <tinyara/sensors/ais25ba.h>
 
 /****************************************************************************
  * Pre-Processor Definitions
@@ -45,22 +46,36 @@
 /****************************************************************************
  * Private Types
  ****************************************************************************/
-
 /****************************************************************************
  * Private Function Prototypes
  ****************************************************************************/
-static ssize_t mlx90617_read(struct sensor_upperhalf_s *dev, FAR char *buffer);
+static ssize_t ais25ba_read(FAR struct sensor_upperhalf_s *dev, FAR char *buffer);
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
-struct sensor_ops_s g_mlx90617_ops = {
-	.sensor_read = mlx90617_read,
+struct sensor_ops_s g_ais25ba_ops = {
+        .sensor_read = ais25ba_read,
 };
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-static void mlx90617_read_i2c(struct i2c_dev_s *i2c,struct i2c_config_s config, uint8_t reg, int len, uint16_t *data)
+static void ais25ba_verify_sensor(struct i2c_dev_s *i2c, struct i2c_config_s config)
+{
+        int ret = 0;
+        int reg[1];
+        uint8_t data[1];
+        reg[0] = 0x0F;                                  //WHO_AM_I
+        printf("add %8x, freq %d, len%d\n", config.address, config.frequency, config.addrlen);
+        ret = i2c_write(i2c, &config, (uint8_t *)reg, 1);
+        if (ret == 1) {
+                i2c_read(i2c, &config, (uint8_t *)data, 1);
+                printf("data read is %8x\n", data[0]); // this should be 0x20
+        }
+}
+
+static void ais25ba_read_i2c(struct i2c_dev_s *i2c,struct i2c_config_s config, uint8_t reg, int len, uint16_t *data)
 {
 	lldbg("%d %d %d\n", config.address, config.addrlen, config.frequency);
 	uint8_t buffer[3];
@@ -82,54 +97,66 @@ static void mlx90617_read_i2c(struct i2c_dev_s *i2c,struct i2c_config_s config, 
 	}
 }
 
-static ssize_t mlx90617_read(struct sensor_upperhalf_s *dev, FAR char *buffer)
+static void ais25ba_i2s_callback(FAR struct i2s_dev_s *dev, FAR struct ap_buffer_s *apb, FAR void *arg, int result)
 {
-	FAR struct mlx90617_dev_s *priv = (struct mlx90617_dev_s *)dev->priv;
+        lldbg("in callback..........................................\n");
+        lldbg("apb=%p nbytes=%d result=%d\n", apb, apb->nbytes, result);
+
+}
+
+static int ais25ba_read_i2s(struct i2s_dev_s *i2s)
+{
+        struct ap_buffer_s *apb;
+        //apb_reference(&apb);
+        struct audio_buf_desc_s desc;
+        desc.numbytes = 256;
+        desc.u.ppBuffer = &apb;
+
+        int ret = apb_alloc(&desc);
+        if (ret < 0) {
+                printf("alloc fail\n");
+                return;
+        }
+        ret = I2S_RECEIVE(i2s, apb, ais25ba_i2s_callback, NULL, 1000);/* 100 ms timeout for read data */
+	printf("i2s receive return %d\n", ret);
+        if (ret < 0) {
+                printf("ERROR: I2S_RECEIVE returned: %d\n", ret);
+        }
+	return ret;
+}
+
+static ssize_t ais25ba_read(FAR struct sensor_upperhalf_s *dev, FAR char *buffer)
+{
+	FAR struct ais25ba_dev_s *priv = dev->priv;
+	size_t outlen;
+	irqstate_t flags;
 	int ret;
 	uint8_t reg[2];
 	uint16_t data[3];
 	float Ta_N, To_N;
 
 	struct i2c_dev_s *i2c = priv->i2c;
+	struct i2s_dev_s *i2s = priv->i2s;
 	struct i2c_config_s config = priv->i2c_config;
 	/* Wait for semaphore to prevent concurrent reads */
-
-	config.address = 0x5A;
-	//config.address = (0xA0 >> 1);
-	reg[0] = 0x06;
-	//reg[0] = 0x23;
-	mlx90617_read_i2c(i2c, config, reg, 3, data);
-	Ta_N = (float)(data[0]) * 0.02 - 273.15;  // MLX90614 Ta
-	printf("Ta_N 614%f\n", Ta_N);
+	ais25ba_verify_sensor(i2c, config);
+	ais25ba_read_i2s(i2s);
 	
-	reg[0] = 0x07;
-        mlx90617_read_i2c(i2c, config, reg, 3, data);
-	To_N = (float)(data[0]) * 0.02 - 273.15;  // MLX90614 To
-	printf("To_N 614%f\n", To_N);
-
-	config.address = 0x5D;
-	reg[0] = 0x06;
-        mlx90617_read_i2c(i2c, config, reg, 3, data);
-        Ta_N = (float)(data[0]) * 0.02 - 273.15;  // MLX90614 Ta
-        printf("Ta_N 617%f\n", Ta_N);
-
-        reg[0] = 0x07;
-        mlx90617_read_i2c(i2c, config, reg, 3, data);
-        To_N = (float)(data[0]) * 0.02 - 273.15;  // MLX90614 To
-        printf("To_N 617%f\n", To_N);
-
-	return 0;
+	return OK;
 }
 
-int mlx90617_initialize(FAR const char *devpath, struct mlx90617_dev_s *priv)
+
+int ais25ba_initialize(const char *devpath, struct ais25ba_dev_s *priv)
 {
 	int ret = 0;
 
 	/* Setup device structure. */
+
 	struct sensor_upperhalf_s *upper = (struct sensor_upperhalf_s *)kmm_zalloc(sizeof(struct sensor_upperhalf_s));
-	upper->ops = &g_mlx90617_ops;
+	upper->ops = &g_ais25ba_ops;
 	upper->priv = priv;
 	priv->upper = upper;
 
+	printf("sensor registered success\n");
 	return sensor_register(devpath, upper);
 }
