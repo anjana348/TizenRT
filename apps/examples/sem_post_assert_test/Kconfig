@@ -1,0 +1,26 @@
+#
+# For a description of the syntax of this configuration file,
+# see kconfig-language at https://www.kernel.org/doc/Documentation/kbuild/kconfig-language.txt
+#
+
+config EXAMPLES_SEM_POST_ASSERT_TEST
+	bool "Semaphore post assert reproduction test"
+	default n
+	depends on PRIORITY_INHERITANCE
+	---help---
+		Enable the semaphore post assert reproduction test.
+
+		This test reproduces the DEBUGASSERT in sem_restorebaseprio()
+		(sem_holder.c:926) that fires when sem_post() finds
+		semcount <= 0 but no valid waiter on the wait queue.
+
+		Usage from TASH:
+		  sem_post_assert_test single   - 1 waiter, state mismatch
+		  sem_post_assert_test multi    - 2 waiters, partial recovery
+		  sem_post_assert_test all      - run all scenarios
+
+		Requires CONFIG_DEBUG=y for the assert to actually fire.
+
+config USER_ENTRYPOINT
+	string
+	default "sem_post_assert_test_main" if EXAMPLES_SEM_POST_ASSERT_TEST
