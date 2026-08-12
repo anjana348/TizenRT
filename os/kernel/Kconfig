@@ -259,11 +259,34 @@ config WDOG_INTRESERVE
 		by interrupt handler.  This setting determines that number of
 		reserved watchdogs.
 
+config WDOG_MMU_PROTECT
+	bool "Watchdog MMU page protection"
+	default n
+	depends on ARCH_USE_MMU
+	---help---
+		Enable MMU page-level protection for watchdog static memory.
+		All watchdog static data (g_wdfreelist, g_wdactivelist, g_wdnfree,
+		and g_wdpool[]) is packed into a single page-aligned 4KB page.
+		After initialization, the page is set to Read-Only.  Any wild
+		pointer write from non-wdog code triggers an immediate Data Abort
+		at the corrupting instruction.
+
+		Wdog code temporarily restores Read-Write permission before
+		modifying its data, then re-protects the page.  A nesting counter
+		handles reentrant calls (e.g. wd_timer -> callback -> wd_start).
+
+		This provides early detection of memory corruption affecting the
+		watchdog subsystem.
+
+		Note: On SMP systems, TLB invalidation is CPU-local.  Full
+		cross-core TLB flush would require inner-shareable TLB ops.
+
 config PREALLOC_TIMERS
 	int "Number of pre-allocated POSIX timers"
 	default 8 if !DISABLE_POSIX_TIMERS
 	default 0 if DISABLE_POSIX_TIMERS
 	---help---
+
 		The number of pre-allocated POSIX timer structures.  The system manages a
 		pool of preallocated timer structures to minimize dynamic allocations.  Set to
 		zero for all dynamic allocations.
