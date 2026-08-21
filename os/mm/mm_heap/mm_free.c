@@ -180,7 +180,7 @@ static void mm_free_internal(FAR struct mm_heap_s *heap, FAR void *mem, mmaddres
 		mdbg("2nd free (double free): now try to release by %s (%d) at addr 0x%08x\n", task_name, free_call_pid, free_call_addr);
 #ifdef CONFIG_DEBUG_MM_HEAPINFO
 		GET_TASK_NAME_BY_PID(task_name, node->pid);
-		mdbg("The node was allocated by %s (%d) at addr 0x%08x\n", task_name, node->pid, node->alloc_call_addr);
+		mdbg("The node was allocated by %s (%d) at addr 0x%08x\n", task_name, node->pid, (mmaddress_t)((struct mm_allocnode_s *)node)->backtrace[0]);
 #endif
 		mm_givesemaphore(heap);
 		return;

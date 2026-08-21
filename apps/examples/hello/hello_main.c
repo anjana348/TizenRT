@@ -56,6 +56,15 @@
 
 #include <tinyara/config.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <tinyara/prodconfig.h>
+#include <tinyara/fs/ioctl.h>
+
+#define MAX_ALLOCATIONS 100
+#define ALLOC_SIZE 1000
 
 /****************************************************************************
  * hello_main
@@ -67,6 +76,104 @@ int main(int argc, FAR char *argv[])
 int hello_main(int argc, char *argv[])
 #endif
 {
-	printf("Hello, World!!\n");
+	int fd;
+	int num_blocks = 0;
+	int ret;
+	int i;
+	void *user_ptrs[MAX_ALLOCATIONS];
+	int kernel_alloc_count = 0;
+	int user_alloc_count = 0;
+
+	if (argc > 1) {
+		num_blocks = atoi(argv[1]);
+		
+		if (num_blocks <= 0) {
+			printf("Hello, World!! Invalid number of blocks: %s\n", argv[1]);
+			printf("Usage: hello <num_blocks> - Allocate and deallocate memory blocks\n");
+			return -1;
+		}
+		
+		if (num_blocks > MAX_ALLOCATIONS) {
+			printf("Warning: Limiting allocations to %d (max allowed)\n", MAX_ALLOCATIONS);
+			num_blocks = MAX_ALLOCATIONS;
+		}
+
+		printf("Hello, World!! PID %d\n", getpid());
+		printf("Starting memory allocation test for %d blocks...\n", num_blocks);
+		printf("Each block: %d bytes (user space) + 1 block (kernel space)\n", ALLOC_SIZE);
+		printf("Sleep 2 seconds between each operation.\n");
+		printf("NOTE: Pointers are deliberately discarded to create UNREACHABLE leaks.\n");
+		printf("Run 'mem_leak' during the 2-second sleep to see the leaks.\n\n");
+
+		/* Initialize pointer array */
+		memset(user_ptrs, 0, sizeof(user_ptrs));
+
+		/* Open prodconfig device for kernel allocations */
+		fd = open(PRODCONFIG_DRVPATH, O_RDWR);
+		if (fd < 0) {
+			printf("Failed to open %s device\n", PRODCONFIG_DRVPATH);
+			return -1;
+		}
+
+		/* ============ ALLOCATION PHASE ============ */
+		printf("========== ALLOCATION PHASE ==========\n");
+		for (i = 0; i < num_blocks; i++) {
+			/* Allocate in user space - then discard the pointer to create
+			 * an unreachable leak. The mem_leak checker scans stack, BSS,
+			 * and data for references; with no stored pointer, the memory
+			 * is unreachable and will be reported as a leak.
+			 */
+			void *leaked_ptr = malloc(ALLOC_SIZE);
+			if (leaked_ptr != NULL) {
+				user_alloc_count++;
+				printf("[%d/%d] User space: Allocated %d bytes at %p (LEAK: pointer discarded)\n", 
+				       i + 1, num_blocks, ALLOC_SIZE, leaked_ptr);
+				/* Deliberately lose the pointer - do NOT store it */
+				leaked_ptr = NULL;
+			} else {
+				printf("[%d/%d] User space: Malloc FAILED for block %d\n", 
+				       i + 1, num_blocks, i);
+			}
+
+			/* Allocate in kernel space with PRODIOC_LEAK - this allocates
+			 * kernel memory without storing the pointer, creating an
+			 * unreachable leak in the kernel heap.
+			 */
+			ret = ioctl(fd, PRODIOC_LEAK, 1);
+			if (ret >= 0) {
+				kernel_alloc_count++;
+				printf("[%d/%d] Kernel space: Leaked 1 block via PRODIOC_LEAK (ioctl returned %d)\n", 
+				       i + 1, num_blocks, ret);
+			} else {
+				printf("[%d/%d] Kernel space: ioctl PRODIOC_LEAK FAILED (ret=%d)\n", 
+				       i + 1, num_blocks, ret);
+			}
+
+			printf("--- Sleeping 2 seconds (run 'mem_leak' now to see leaks) ---\n\n");
+			sleep(2);
+		}
+
+		close(fd);
+		printf("========== ALLOCATION PHASE COMPLETE ==========\n");
+		printf("Total user space allocations: %d/%d\n", user_alloc_count, num_blocks);
+		printf("Total kernel space allocations: %d/%d\n", kernel_alloc_count, num_blocks);
+		printf("\n");
+
+		/* ============ DEALLOCATION PHASE ============ */
+		printf("========== DEALLOCATION PHASE ==========\n");
+		printf("NOTE: Leaked blocks are NOT freed - they are permanently lost.\n");
+		printf("The user-space pointers were discarded, and kernel PRODIOC_LEAK\n");
+		printf("blocks were never tracked. Use 'mem_leak' to verify the leaks.\n\n");
+
+		printf("========== DEALLOCATION PHASE COMPLETE ==========\n");
+		printf("Memory test completed (leaked blocks remain allocated)!\n");
+	} else {
+		printf("Hello, World!!\n");
+		printf("Usage: hello <num_blocks> - Allocate and deallocate memory blocks\n");
+		printf("  num_blocks: Number of times to allocate (max %d)\n", MAX_ALLOCATIONS);
+		printf("  Each iteration allocates in both user space and kernel space\n");
+		printf("  2 second sleep between each operation\n");
+	}
+
 	return 0;
 }

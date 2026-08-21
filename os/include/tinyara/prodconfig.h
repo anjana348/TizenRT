@@ -28,6 +28,13 @@
 #define SWD_ENABLED           (1 << 1)
 #define SWD_DOWNLOAD_DISABLED 0
 
+/* Prodconfig ioctl commands */
+#include <tinyara/fs/ioctl.h>
+#define _PRODIOC(nr)       _IOC(0x3c00, nr)  /* Unique base for prodconfig */
+#define PRODIOC_ALLOC      _PRODIOC(0x0001)  /* Allocate kernel memory blocks */
+#define PRODIOC_FREE       _PRODIOC(0x0002)  /* Free kernel memory blocks */
+#define PRODIOC_LEAK       _PRODIOC(0x0003)  /* Allocate kernel memory without tracking (leak) */
+
 int up_check_prodswd(void);
 int up_check_proddownload(void);
 void prodconfig_register(void);

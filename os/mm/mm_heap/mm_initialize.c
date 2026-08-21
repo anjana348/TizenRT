@@ -72,6 +72,10 @@
  * Public Variables
  ****************************************************************************/
 
+#if CONFIG_MM_BACKTRACE >= 0
+unsigned long g_mm_seqno;	/* Monotonically increasing allocation sequence counter */
+#endif
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/

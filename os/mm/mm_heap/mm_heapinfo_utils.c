@@ -78,8 +78,8 @@ static void heapinfo_capture_insert(struct mm_heap_s *heap, FAR struct mm_allocn
 		entry->addr = (void *)node;
 		entry->size = node->size;
 		entry->old_size = 0;
-		entry->caller = node->alloc_call_addr;
-		memcpy(entry->backtrace, node->alloc_caller_backtrace, sizeof(entry->backtrace));
+		entry->caller = (mmaddress_t)node->backtrace[0];
+		memcpy(entry->backtrace, node->backtrace, sizeof(entry->backtrace));
 		entry->pid = node->pid;
 		entry->type = HEAPINFO_CAPTURE_ALLOC;
 	} else {
@@ -99,8 +99,8 @@ static void heapinfo_capture_insert_freed(struct mm_heap_s *heap, FAR struct mm_
 		entry->addr = (void *)node;
 		entry->size = size;
 		entry->old_size = 0;
-		entry->caller = node->alloc_call_addr;
-		memcpy(entry->backtrace, node->alloc_caller_backtrace, sizeof(entry->backtrace));
+		entry->caller = (mmaddress_t)node->backtrace[0];
+		memcpy(entry->backtrace, node->backtrace, sizeof(entry->backtrace));
 		entry->pid = pid;
 		entry->type = HEAPINFO_CAPTURE_FREED;
 	} else {
@@ -325,14 +325,10 @@ void heapinfo_update_total_size(struct mm_heap_s *heap, mmsize_t size, pid_t pid
  ****************************************************************************/
 void heapinfo_update_node(FAR struct mm_heap_s *heap, FAR struct mm_allocnode_s *node, mmaddress_t caller_retaddr)
 {
-	int i;
 	DEBUGASSERT(node);
-	node->alloc_call_addr = caller_retaddr;
-	/* Default the deeper backtrace levels to NULL for every allocation (user
-	 * and kernel). User-space allocations get them filled in mm_malloc(). */
-	for (i = 0; i < HEAPINFO_BACKTRACE_DEPTH - 1; i++) {
-		node->alloc_caller_backtrace[i] = NULL;
-	}
+	/* Store the immediate caller as backtrace[0]. The full call stack will
+	 * be filled by MM_ADD_BACKTRACE() right after this call. */
+	node->backtrace[0] = caller_retaddr;
 	node->pid = getpid();
 	/* Tag this allocation if a capture window is active on this heap and the pid
 	 * matches. Blocks freed before the window is stopped are coalesced (they
